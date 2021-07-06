@@ -17,6 +17,7 @@
 #define EVENTCATEGORIZERTOOLS_H
 
 #include <TVector3.h>
+#include <TRotation.h>
 #include <boost/property_tree/ptree.hpp>
 
 #include <JPetEvent/JPetEvent.h>
@@ -53,7 +54,7 @@ public:
   static bool checkFor3Gamma(const JPetEvent& event, JPetStatistics& stats, bool saveHistos);
 
   static bool checkForPrompt(const JPetEvent& event, JPetStatistics& stats, bool saveHistos, double deexTOTCutMin, double deexTOTCutMax);
-
+  static uint findPrompt(const JPetEvent& event, JPetStatistics& stats, bool saveHistos, double deexTOTCutMin, double deexTOTCutMax);
   // Scatter test
   static bool checkForScatter(const JPetEvent& event, JPetStatistics& stats, bool saveHistos, double scatterTOFTimeDiff);
 
@@ -87,12 +88,17 @@ public:
   static TVector3 calculateAnnihilationPoint(const JPetHit& hit1, const JPetHit& hit2, const JPetHit& hit3);
 
   static double calculatePlaneCenterDistance(const JPetHit& firstHit, const JPetHit& secondHit, const JPetHit& thirdHit);
-
-  static bool stream2Gamma(const JPetEvent& event, JPetStatistics& stats, bool saveHistos, double b2bSlotThetaDiff, double b2bTimeDiff,
-                           double maxScatter);
+  static double calculatePlanePointDistance(const JPetHit& firsthit, const JPetHit& secondhit, const JPetHit& thirdhit, 
+                                            TVector3 pointCoordinates);
+  static double scatterTest(JPetHit hit1, JPetHit hit2);
+  static double calcAngle2D(JPetHit hit1, JPetHit hit2);
+  static double calcAngleFromPoint(JPetHit hit1, JPetHit hit2, TVector3 point);
+  static bool stream2Gamma(const JPetEvent& event, JPetStatistics& stats, bool saveHistos, double b2bSlotThetaDiff, double maxScatter);
 
   static bool stream3Gamma(const JPetEvent& event, JPetStatistics& stats, bool saveHistos, double d3SlotThetaMin, double d3TimeDiff,
                            double d3DistanceFromCenter, double maxScatter);
+  static bool stream2Gamma1Prompt(const JPetEvent& event, JPetStatistics& stats, bool saveHistos, double b2bSlotThetaDiff, 
+                                         double promptGammaSlotThetaDiff, double maxScatter, uint promptIndex);
 
   static TVector3 findIntersection(TVector3 hit1Pos, TVector3 hit2Pos, TVector3 hit3Pos, double t21, double t31);
 

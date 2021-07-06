@@ -33,13 +33,21 @@ bool EventCategorizerImaging::init()
 
   // Event categorization parameters
   // Angle
-  if (isOptionSet(fParams.getOptions(), k2GammaMaxAngleParamKey))
+  if (isOptionSet(fParams.getOptions(), k2GammaMinAngleParamKey))
   {
-    f2GammaMaxAngle = getOptionAsDouble(fParams.getOptions(), k2GammaMaxAngleParamKey);
+    f2GammaMinAngle = getOptionAsDouble(fParams.getOptions(), k2GammaMinAngleParamKey);
   }
   else
   {
-    WARNING(Form("No value of the %s parameter provided by the user. Using default value of %lf.", k2GammaMaxAngleParamKey.c_str(), f2GammaMaxAngle));
+    WARNING(Form("No value of the %s parameter provided by the user. Using default value of %lf.", k2GammaMinAngleParamKey.c_str(), f2GammaMinAngle));
+  }
+  if (isOptionSet(fParams.getOptions(), k2Gamma1PromptMinAngleParamKey))
+  {
+    f2Gamma1PromptMinAngle = getOptionAsDouble(fParams.getOptions(), k2Gamma1PromptMinAngleParamKey);
+  }
+  else
+  {
+    WARNING(Form("No value of the %s parameter provided by the user. Using default value of %lf.", k2Gamma1PromptMinAngleParamKey.c_str(), f2Gamma1PromptMinAngle));
   }
   if (isOptionSet(fParams.getOptions(), k3GammaMinAngleParamKey))
   {
@@ -66,6 +74,22 @@ bool EventCategorizerImaging::init()
   else
   {
     WARNING(Form("No value of the %s parameter provided by the user. Using default value of %lf.", kMaxAnnihTOTParamKey.c_str(), fMaxAnnihTOT));
+  }
+  if (isOptionSet(fParams.getOptions(), kMinDeexTOTParamKey))
+  {
+    fMinDeexTOT = getOptionAsDouble(fParams.getOptions(), kMinDeexTOTParamKey);
+  }
+  else
+  {
+    WARNING(Form("No value of the %s parameter provided by the user. Using default value of %lf.", kMinDeexTOTParamKey.c_str(), fMinDeexTOT));
+  }
+  if (isOptionSet(fParams.getOptions(), kMaxDeexTOTParamKey))
+  {
+    fMaxDeexTOT = getOptionAsDouble(fParams.getOptions(), kMaxDeexTOTParamKey);
+  }
+  else
+  {
+    WARNING(Form("No value of the %s parameter provided by the user. Using default value of %lf.", kMaxDeexTOTParamKey.c_str(), fMaxDeexTOT));
   }
 
   // Time diffs
@@ -145,7 +169,7 @@ bool EventCategorizerImaging::exec()
       else
       {
         JPetEvent categorizedEvent(event);
-        if (EventCategorizerTools::stream2Gamma(event, getStatistics(), fSaveHistos, f2GammaMaxAngle, f2GammaMaxTOF, fScatterTOFTimeDiff))
+        if (EventCategorizerTools::stream2Gamma(event, getStatistics(), fSaveHistos, f2GammaMinAngle, fScatterTOFTimeDiff))
         {
           categorizedEvent.addEventType(JPetEventType::k2Gamma);
         }
@@ -153,6 +177,13 @@ bool EventCategorizerImaging::exec()
                                                 fScatterTOFTimeDiff))
         {
           categorizedEvent.addEventType(JPetEventType::k3Gamma);
+        }
+        uint promptIndex = EventCategorizerTools::findPrompt(event, getStatistics(), fSaveHistos, fMinDeexTOT, fMaxDeexTOT);
+        if (EventCategorizerTools::stream2Gamma1Prompt(event, getStatistics(), fSaveHistos, f2GammaMinAngle, f2Gamma1PromptMinAngle, fScatterTOFTimeDiff, 
+                                                        promptIndex))
+        {
+          categorizedEvent.addEventType(JPetEventType::k2Gamma);
+          categorizedEvent.addEventType(JPetEventType::kPrompt);
         }
         if (categorizedEvent.isTypeOf(JPetEventType::k2Gamma) || categorizedEvent.isTypeOf(JPetEventType::k3Gamma))
         {
@@ -172,6 +203,10 @@ bool EventCategorizerImaging::exec()
           if (categorizedEvent.isTypeOf(JPetEventType::k3Gamma))
           {
             getStatistics().fillHistogram("event_tags", 3);
+          }
+          if (categorizedEvent.isTypeOf(JPetEventType::k3Gamma) && categorizedEvent.isTypeOf(JPetEventType::kPrompt))
+          {
+            getStatistics().fillHistogram("event_tags", 6);
           }
         }
       }
@@ -229,6 +264,27 @@ void EventCategorizerImaging::initialiseHistograms()
   getStatistics().createHistogramWithAxes(
       new TH2D("ap_zy_zoom", "ZY position of annihilation point (bin 0.25 cm)", 132, -16.5, 16.5, 132, -16.5, 16.5), "Z position [cm]",
       "Y position [cm]");
+  
+  getStatistics().createHistogramWithAxes(new TH2D("ap_yx_2g1p", "YX position of annihilation point (bin 0.5 cm)", 202, -50.5, 50.5, 202, -50.5, 50.5),
+                                          "Y position [cm]", "X position [cm]");
+
+  getStatistics().createHistogramWithAxes(new TH2D("ap_zx_2g1p", "ZX position of annihilation point (bin 0.5 cm)", 202, -50.5, 50.5, 202, -50.5, 50.5),
+                                          "Z position [cm]", "X position [cm]");
+
+  getStatistics().createHistogramWithAxes(new TH2D("ap_zy_2g1p", "ZY position of annihilation point (bin 0.5 cm)", 202, -50.5, 50.5, 202, -50.5, 50.5),
+                                          "Z position [cm]", "Y position [cm]");
+
+  getStatistics().createHistogramWithAxes(
+      new TH2D("ap_yx_zoom_2g1p", "YX position of annihilation point (bin 0.25 cm)", 132, -16.5, 16.5, 132, -16.5, 16.5), "Y position [cm]",
+      "X position [cm]");
+
+  getStatistics().createHistogramWithAxes(
+      new TH2D("ap_zx_zoom_2g1p", "ZX position of annihilation point (bin 0.25 cm)", 132, -16.5, 16.5, 132, -16.5, 16.5), "Z position [cm]",
+      "X position [cm]");
+
+  getStatistics().createHistogramWithAxes(
+      new TH2D("ap_zy_zoom_2g1p", "ZY position of annihilation point (bin 0.25 cm)", 132, -16.5, 16.5, 132, -16.5, 16.5), "Z position [cm]",
+      "Y position [cm]");
 
   getStatistics().createHistogramWithAxes(new TH1D("scatter_test_dist", "Scatter test calculated by distance", 200, 0.0, 120.0),
                                           "Difference of Hits Position and (time diff)*c [cm]", "Number of Hits Pairs");
@@ -257,6 +313,14 @@ void EventCategorizerImaging::initialiseHistograms()
 
   getStatistics().createHistogramWithAxes(new TH1D("stream2g_theta_diff", "2 Gamma Hits angles", 180, -0.5, 179.5), "Hits theta diff [deg]",
                                           "Number of hit pairs");
+  
+  getStatistics().createHistogramWithAxes(new TH1D("stream2g1p_tdiff", "2 Gamma 1 Prompt Hits Time Difference", 200, 0.0, 10000.0), "Hits time difference [ns]",
+                                          "Number of paris");
+
+  getStatistics().createHistogramWithAxes(new TH1D("stream2g1p_dlor_dist", "Delta LOR distance", 200, 0.0, 50.0), "Delta LOR [cm]", "Number LORs");
+
+  getStatistics().createHistogramWithAxes(new TH1D("stream2g1p_theta_diff", "2 Gamma 1 Prompt Hits angles", 180, -0.5, 179.5), "Hits theta diff [deg]",
+                                          "Number of hit pairs");
 
   getStatistics().createHistogramWithAxes(new TH2D("stream3g_thetas", "3 Gamma Thetas plot", 251, -0.5, 250.5, 201, -0.5, 200.5),
                                           "Transformed thetas 1-2 [deg]", "Transformed thetas 2-3 [deg]");
@@ -269,19 +333,6 @@ void EventCategorizerImaging::initialiseHistograms()
 
   getStatistics().createHistogramWithAxes(new TH1D("event_tags", "Result of event categorization", 5, 0.5, 5.5), "Signal label", "Number of SigChs");
   std::vector<std::pair<unsigned, std::string>> binLabels = {make_pair(1, "Unknown"), make_pair(2, "2 gamma"), make_pair(3, "3 gamma"),
-                                                             make_pair(4, "Prompt"), make_pair(5, "Cosmics")};
+                                                             make_pair(4, "Prompt"), make_pair(5, "Cosmics"), make_pair(6, "2 gamma, 1 prompt")};
   getStatistics().setHistogramBinLabel("event_tags", getStatistics().AxisLabel::kXaxis, binLabels);
-
-  // Histograms for scattering category
-  // getStatistics().createHistogram(
-  //   new TH1F("ScatterTOF_TimeDiff", "Difference of Scatter TOF and hits time difference",
-  //     200, 0.0, 3.0*fScatterTOFTimeDiff));
-  // getStatistics().getHisto1D("ScatterTOF_TimeDiff")->GetXaxis()->SetTitle("Scat_TOF & time diff [ps]");
-  // getStatistics().getHisto1D("ScatterTOF_TimeDiff")->GetYaxis()->SetTitle("Number of Hit Pairs");
-
-  // getStatistics().createHistogram(
-  //    new TH2F("ScatterAngle_PrimaryTOT", "Angle of scattering vs. TOT of primary hits",
-  //     181, -0.5, 180.5, 200, 0.0, 40000.0));
-  // getStatistics().getHisto2D("ScatterAngle_PrimaryTOT")->GetXaxis()->SetTitle("Scattering Angle");
-  // getStatistics().getHisto2D("ScatterAngle_PrimaryTOT")->GetYaxis()->SetTitle("TOT of primary hit [ps]");
 }

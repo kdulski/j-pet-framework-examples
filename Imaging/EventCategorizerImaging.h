@@ -36,11 +36,14 @@ public:
   virtual bool terminate() override;
 
 protected:
-  const std::string k2GammaMaxAngleParamKey = "Imaging_2GammaMaxAngle_double";
+  const std::string k2GammaMinAngleParamKey = "Imaging_2GammaMinAngle_double";
+  const std::string k2Gamma1PromptMinAngleParamKey = "Imaging_2Gamma1PromptMinAngle_double";
   const std::string k3GammaMinAngleParamKey = "Imaging_3GammaMinAngle_double";
 
   const std::string kMinAnnihTOTParamKey = "Imaging_MinAnnihTOT_double";
   const std::string kMaxAnnihTOTParamKey = "Imaging_MaxAnnihTOT_double";
+  const std::string kMinDeexTOTParamKey = "Imaging_MinDeexTOT_double";
+  const std::string kMaxDeexTOTParamKey = "Imaging_MaxDeexTOT_double";
 
   const std::string kScatterTimeDiffParamKey = "Imaging_ScatterTimeDiff_double";
   const std::string k2GammaMaxTOFParamKey = "Imaging_2GammaMaxTOF_double";
@@ -51,11 +54,14 @@ protected:
   const std::string kSaveLORsOnlyParamKey = "Imaging_SaveLORsOnly_bool";
   const std::string kSaveControlHistosParamKey = "Save_Control_Histograms_bool";
 
-  double f2GammaMaxAngle = 5.0;
+  double f2GammaMinAngle = 5.0;
+  double f2Gamma1PromptMinAngle = 15.0;
   double f3GammaMinAngle = 180.0;
 
   double fMinAnnihTOT = 150000.0;
   double fMaxAnnihTOT = 250000.0;
+  double fMinDeexTOT = 350000.0;
+  double fMaxDeexTOT = 500000.0;
 
   double fScatterTOFTimeDiff = 1000.0;
   double f2GammaMaxTOF = 2000.0;

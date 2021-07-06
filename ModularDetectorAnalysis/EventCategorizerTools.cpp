@@ -550,6 +550,19 @@ bool EventCategorizerTools::checkForPrompt(const JPetEvent& event, JPetStatistic
   return false;
 }
 
+uint EventCategorizerTools::findPrompt(const JPetEvent& event, JPetStatistics& stats, bool saveHistos, double deexTOTCutMin, double deexTOTCutMax)
+{
+  for (unsigned i = 0; i < event.getHits().size(); i++)
+  {
+    double tot = event.getHits().at(i).getEnergy();
+    if (tot > deexTOTCutMin && tot < deexTOTCutMax)
+    {
+      return i+1;
+    }
+  }
+  return 0;
+}
+
 /**
  * Method for determining type of event - scatter
  */
@@ -595,7 +608,7 @@ bool EventCategorizerTools::checkForScatter(const JPetHit& primaryHit, const JPe
   double timeDiff = scatterHit.getTime() - primaryHit.getTime();
 
   double testDist = fabs(dist - timeDiff * kLightVelocity_cm_ps);
-  double testTime = fabs(timeDiff - dist / kLightVelocity_cm_ps);
+  double testTime = fabs(timeDiff) - dist / kLightVelocity_cm_ps;
 
   stats.fillHistogram("scatter_test_dist", testDist);
   stats.fillHistogram("scatter_test_time", testTime);
@@ -721,55 +734,25 @@ TVector3 EventCategorizerTools::calculateAnnihilationPoint(const JPetHit& hit1, 
  */
 TVector3 EventCategorizerTools::calculateAnnihilationPoint(const JPetHit& hit1, const JPetHit& hit2, const JPetHit& hit3)
 {
-  // Calculating norm vector for a surface created by 3 hits (vectors of their positions)
-  TVector3 surfaceVec;
-  surfaceVec.SetX((hit2.getPosY() - hit1.getPosY()) * (hit3.getPosZ() - hit1.getPosZ()) -
-                  (hit2.getPosZ() - hit1.getPosZ()) * (hit3.getPosY() - hit1.getPosY()));
-  surfaceVec.SetY((hit2.getPosZ() - hit1.getPosZ()) * (hit3.getPosX() - hit1.getPosX()) -
-                  (hit2.getPosX() - hit1.getPosX()) * (hit3.getPosZ() - hit1.getPosZ()));
-  surfaceVec.SetZ((hit2.getPosX() - hit1.getPosX()) * (hit3.getPosY() - hit1.getPosY()) -
-                  (hit2.getPosY() - hit1.getPosY()) * (hit3.getPosX() - hit1.getPosX()));
-
-  // Unitary perpendicular vector
-  TVector3 perpVec(-surfaceVec.Y(), surfaceVec.X(), 0);
-  perpVec = perpVec.Unit();
-
-  double theta = -acos(surfaceVec.Z() / surfaceVec.Mag());
-
-  // Defining rotation transformation to 2D plane and its reverse
-  TVector3 rotX, rotY, rotZ, rotXr, rotYr, rotZr;
-  rotX.SetX(cos(theta) + perpVec.X() * perpVec.X() * (1 - cos(theta)));
-  rotX.SetY(perpVec.X() * perpVec.Y() * (1 - cos(theta)));
-  rotX.SetZ(perpVec.Y() * sin(theta));
-  rotY.SetX(perpVec.X() * perpVec.Y() * (1 - cos(theta)));
-  rotY.SetY(cos(theta) + perpVec.Y() * perpVec.Y() * (1 - cos(theta)));
-  rotY.SetZ(-perpVec.X() * sin(theta));
-  rotZ.SetX(-perpVec.Y() * sin(theta));
-  rotZ.SetY(perpVec.X() * sin(theta));
-  rotZ.SetZ(cos(theta));
-  rotXr.SetX(cos(-theta) + perpVec.X() * perpVec.X() * (1 - cos(-theta)));
-  rotXr.SetY(perpVec.X() * perpVec.Y() * (1 - cos(-theta)));
-  rotXr.SetZ(perpVec.Y() * sin(-theta));
-  rotYr.SetX(perpVec.X() * perpVec.Y() * (1 - cos(-theta)));
-  rotYr.SetY(cos(-theta) + perpVec.Y() * perpVec.Y() * (1 - cos(-theta)));
-  rotYr.SetZ(-perpVec.X() * sin(-theta));
-  rotZr.SetX(-perpVec.Y() * sin(-theta));
-  rotZr.SetY(perpVec.X() * sin(-theta));
-  rotZr.SetZ(cos(-theta));
-
-  // Centers of circles transformed
-  TVector3 p1(rotX * hit1.getPos(), rotY * hit1.getPos(), rotZ * hit1.getPos());
-  TVector3 p2(rotX * hit2.getPos(), rotY * hit2.getPos(), rotZ * hit2.getPos());
-  TVector3 p3(rotX * hit3.getPos(), rotY * hit3.getPos(), rotZ * hit3.getPos());
-
+  TVector3 normal = ((hit2.getPos()-hit1.getPos()).Cross(hit3.getPos()-hit1.getPos())).Unit();
+  TVector3 z(0.,0.,1.);
+  TVector3 rotAxis = normal.Cross(z);
+  double angle = z.Angle(normal); // radians
+  
+  TRotation rot;
+  rot.Rotate(angle, rotAxis);
+  
+  TVector3 point1 = rot*hit1.getPos();
+  TVector3 point2 = rot*hit2.getPos();
+  TVector3 point3 = rot*hit3.getPos();
+    
   // Time differences of hits registration
   double tdiff21 = hit2.getTime() - hit1.getTime();
   double tdiff31 = hit3.getTime() - hit1.getTime();
+  
+  TVector3 intersection = findIntersection(point1, point2, point3, tdiff21, tdiff31);
+  TVector3 annihilationPoint = rot.Inverse()*intersection;
 
-  TVector3 intersection = findIntersection(p1, p2, p3, tdiff21, tdiff31);
-
-  // Transforming back found intersection by reverse rotation
-  TVector3 annihilationPoint(rotXr * intersection, rotYr * intersection, rotZr * intersection);
   return annihilationPoint;
 }
 
@@ -810,12 +793,68 @@ double EventCategorizerTools::calculatePlaneCenterDistance(const JPetHit& firstH
   }
 }
 
+double EventCategorizerTools::calculatePlanePointDistance(
+  const JPetHit& firsthit, const JPetHit& secondhit, const JPetHit& thirdhit, TVector3 pointCoordinates)
+{
+  TVector3 crossprod = (secondhit.getPos() - firsthit.getPos()).Cross(thirdhit.getPos() - secondhit.getPos());
+  double distcoef = -crossprod.X() * secondhit.getPosX() - crossprod.Y() * secondhit.getPosY() - crossprod.Z() * secondhit.getPosZ();
+  double pointAddition = crossprod.X()*pointCoordinates.X() + crossprod.Y()*pointCoordinates.Y() + crossprod.Z()*pointCoordinates.Z();
+  if (crossprod.Mag() != 0) 
+  {
+    return fabs(pointAddition + distcoef) / crossprod.Mag();
+  } 
+  else 
+  {
+    ERROR("one of the hit has zero position vector - unable to calculate distance from the center of the surface");
+    return -1.;
+  }
+}
+
+/**
+ * Calculating scatter test in time domain
+ */
+double EventCategorizerTools::scatterTest(JPetHit hit1, JPetHit hit2)
+{
+    double tDiff = fabs(hit2.getTime() - hit1.getTime());
+    TVector3 vec1 = hit2.getPos() - hit1.getPos();
+    double distance = vec1.Mag();
+    double scattTime = distance/kLightVelocity_cm_ps;
+    return tDiff - scattTime;
+}
+
+/**
+ * Calculating angle between hitsin 2D
+ */
+double EventCategorizerTools::calcAngle2D(JPetHit hit1, JPetHit hit2)
+{
+  double scalarprod = hit1.getPosX()*hit2.getPosX() + hit1.getPosY()*hit2.getPosY();
+  double Magprod = sqrt( ( pow(hit1.getPosX(),2) + pow(hit1.getPosY(),2) )*
+                        ( pow(hit2.getPosX(),2) + pow(hit2.getPosY(),2) ) );
+  double angle = acos( scalarprod/Magprod )*180/3.14159265;
+  return angle;
+}
+
+/**
+ * Calculating angle between hits, from a given point
+ */
+double EventCategorizerTools::calcAngleFromPoint(JPetHit hit1, JPetHit hit2, TVector3 point)
+{
+  TVector3 ShiftedHit1Pos = hit1.getPos() - point;
+  TVector3 ShiftedHit2Pos = hit2.getPos() - point;
+  double scalarprod = ShiftedHit1Pos.X()*ShiftedHit2Pos.X() + ShiftedHit1Pos.Y()*ShiftedHit2Pos.Y() + ShiftedHit1Pos.Z()*ShiftedHit2Pos.Z();
+  double Magprod = sqrt( ( pow(ShiftedHit1Pos.X(),2) + pow(ShiftedHit1Pos.Y(),2) + pow(ShiftedHit1Pos.Z(),2) )*
+                        ( pow(ShiftedHit2Pos.X(),2) + pow(ShiftedHit2Pos.Y(),2) +  pow(ShiftedHit2Pos.Z(),2) ) );
+  double angle = acos( scalarprod/Magprod )*180/3.14159265;
+  return angle;
+}
+
+
 /**
  * Method for determining type of event for streaming - 2 gamma
  * @todo: the selection criteria b2b distance from center needs to be checked
  * and implemented again
  */
-bool EventCategorizerTools::stream2Gamma(const JPetEvent& event, JPetStatistics& stats, bool saveHistos, double b2bSlotthetaDiff, double b2bTimeDiff,
+bool EventCategorizerTools::stream2Gamma(const JPetEvent& event, JPetStatistics& stats, bool saveHistos, double b2bSlotThetaDiff, 
                                          double maxScatter)
 {
   if (event.getHits().size() < 2)
@@ -839,23 +878,21 @@ bool EventCategorizerTools::stream2Gamma(const JPetEvent& event, JPetStatistics&
       }
 
       // Cutting pairs passing scatter test
-      if (checkForScatter(firstHit, secondHit, stats, saveHistos, maxScatter))
+      if (!checkForScatter(firstHit, secondHit, stats, saveHistos, maxScatter))
       {
         continue;
       }
 
       // Checking for back to back
-      double timeDiff = fabs(firstHit.getTime() - secondHit.getTime());
       double deltaLor = (secondHit.getTime() - firstHit.getTime()) * kLightVelocity_cm_ps / 2.0;
-      double theta = TMath::RadToDeg() * firstHit.getPos().Angle(secondHit.getPos());
+      double theta = calcAngle2D(firstHit, secondHit);
 
       if (saveHistos)
       {
-        stats.fillHistogram("stream2g_tdiff", timeDiff);
         stats.fillHistogram("stream2g_dlor_dist", deltaLor);
         stats.fillHistogram("stream2g_theta_diff", theta);
       }
-      if (fabs(theta - 180.0) < b2bSlotthetaDiff && timeDiff < b2bTimeDiff)
+      if (theta > b2bSlotThetaDiff)
       {
         if (saveHistos)
         {
@@ -877,7 +914,7 @@ bool EventCategorizerTools::stream2Gamma(const JPetEvent& event, JPetStatistics&
 /**
  * Method for determining type of event for streaming - 3 gamma annihilation
  */
-bool EventCategorizerTools::stream3Gamma(const JPetEvent& event, JPetStatistics& stats, bool saveHistos, double d3SlotthetaMin, double d3TimeDiff,
+bool EventCategorizerTools::stream3Gamma(const JPetEvent& event, JPetStatistics& stats, bool saveHistos, double d3SlotThetaMin, double d3TimeDiff,
                                          double d3PlaneCenterDist, double maxScatter)
 {
   if (event.getHits().size() < 3)
@@ -892,7 +929,7 @@ bool EventCategorizerTools::stream3Gamma(const JPetEvent& event, JPetStatistics&
     {
       JPetHit secondHit = event.getHits().at(j);
 
-      if (checkForScatter(firstHit, secondHit, stats, saveHistos, maxScatter))
+      if (!checkForScatter(firstHit, secondHit, stats, saveHistos, maxScatter))
       {
         continue;
       }
@@ -901,20 +938,20 @@ bool EventCategorizerTools::stream3Gamma(const JPetEvent& event, JPetStatistics&
       {
         JPetHit thirdHit = event.getHits().at(k);
 
-        if (checkForScatter(firstHit, thirdHit, stats, saveHistos, maxScatter))
+        if (!checkForScatter(firstHit, thirdHit, stats, saveHistos, maxScatter))
         {
           continue;
         }
 
-        if (checkForScatter(secondHit, thirdHit, stats, saveHistos, maxScatter))
+        if (!checkForScatter(secondHit, thirdHit, stats, saveHistos, maxScatter))
         {
           continue;
         }
 
         vector<double> relativeAngles;
-        relativeAngles.push_back(TMath::RadToDeg() * firstHit.getPos().Angle(secondHit.getPos()));
-        relativeAngles.push_back(TMath::RadToDeg() * secondHit.getPos().Angle(thirdHit.getPos()));
-        relativeAngles.push_back(TMath::RadToDeg() * thirdHit.getPos().Angle(firstHit.getPos()));
+        relativeAngles.push_back(calcAngle2D(firstHit, secondHit));
+        relativeAngles.push_back(calcAngle2D(firstHit, thirdHit));
+        relativeAngles.push_back(calcAngle2D(thirdHit, secondHit));
         sort(relativeAngles.begin(), relativeAngles.end());
 
         double transformedX = relativeAngles.at(1) + relativeAngles.at(0);
@@ -928,20 +965,83 @@ bool EventCategorizerTools::stream3Gamma(const JPetEvent& event, JPetStatistics&
           stats.fillHistogram("stream3g_plane_dist", planeCenterDist);
           stats.fillHistogram("stream3g_tdiff", timeDiff);
         }
-        if (transformedX > d3SlotthetaMin && timeDiff < d3TimeDiff && planeCenterDist < d3PlaneCenterDist)
+        if (transformedX > d3SlotThetaMin && timeDiff < d3TimeDiff && planeCenterDist < d3PlaneCenterDist)
         {
           if (saveHistos)
           {
             TVector3 ap = calculateAnnihilationPoint(firstHit, secondHit, thirdHit);
-            stats.fillHistogram("ap_yx", ap.Y(), ap.X());
-            stats.fillHistogram("ap_zx", ap.Z(), ap.X());
-            stats.fillHistogram("ap_zy", ap.Z(), ap.Y());
-            stats.fillHistogram("ap_yx_zoom", ap.Y(), ap.X());
-            stats.fillHistogram("ap_zx_zoom", ap.Z(), ap.X());
-            stats.fillHistogram("ap_zy_zoom", ap.Z(), ap.Y());
+            stats.fillHistogram("ap_yx_3G", ap.Y(), ap.X());
+            stats.fillHistogram("ap_zx_3G", ap.Z(), ap.X());
+            stats.fillHistogram("ap_zy_3G", ap.Z(), ap.Y());
           }
           return true;
         }
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Method for determining type of event for streaming - 3 gamma annihilation
+ */
+bool EventCategorizerTools::stream2Gamma1Prompt(const JPetEvent& event, JPetStatistics& stats, bool saveHistos, double b2bSlotThetaDiff, 
+                                         double promptGammaSlotThetaDiff, double maxScatter, uint promptIndex)
+{
+  if (event.getHits().size() < 2)
+  {
+    return false;
+  }
+  for (uint i = 0; i < event.getHits().size(); i++)
+  {
+    for (uint j = i + 1; j < event.getHits().size(); j++)
+    {
+      JPetHit firstHit, secondHit;
+      if (i == promptIndex || j == promptIndex)
+        continue;
+      
+      if (event.getHits().at(i).getTime() < event.getHits().at(j).getTime())
+      {
+        firstHit = event.getHits().at(i);
+        secondHit = event.getHits().at(j);
+      }
+      else
+      {
+        firstHit = event.getHits().at(j);
+        secondHit = event.getHits().at(i);
+      }
+
+      // Cutting pairs passing scatter test
+      if (!checkForScatter(firstHit, secondHit, stats, saveHistos, maxScatter))
+      {
+        continue;
+      }
+
+      // Checking for back to back
+      double deltaLor = (secondHit.getTime() - firstHit.getTime()) * kLightVelocity_cm_ps / 2.0;
+      double theta = calcAngle2D(firstHit, secondHit);
+      double anglePromptAnni1 = calcAngle2D(firstHit, event.getHits().at(promptIndex));
+      double anglePromptAnni2 = calcAngle2D(secondHit, event.getHits().at(promptIndex));
+      double thetaPrompt = std::min({anglePromptAnni1, anglePromptAnni2});
+
+      if (saveHistos)
+      {
+        stats.fillHistogram("stream2g1p_dlor_dist", deltaLor);
+        stats.fillHistogram("stream2g1p_theta_diff", theta);
+      }
+      if (theta > b2bSlotThetaDiff && thetaPrompt > promptGammaSlotThetaDiff)
+      {
+        if (saveHistos)
+        {
+          TVector3 ap = calculateAnnihilationPoint(firstHit, secondHit);
+          stats.fillHistogram("ap_yx_2g1p", ap.Y(), ap.X());
+          stats.fillHistogram("ap_zx_2g1p", ap.Z(), ap.X());
+          stats.fillHistogram("ap_zy_2g1p", ap.Z(), ap.Y());
+          stats.fillHistogram("ap_yx_zoom_2g1p", ap.Y(), ap.X());
+          stats.fillHistogram("ap_zx_zoom_2g1p", ap.Z(), ap.X());
+          stats.fillHistogram("ap_zy_zoom_2g1p", ap.Z(), ap.Y());
+        }
+        return true;
       }
     }
   }
@@ -953,224 +1053,156 @@ bool EventCategorizerTools::stream3Gamma(const JPetEvent& event, JPetStatistics&
  */
 TVector3 EventCategorizerTools::findIntersection(TVector3 hit1Pos, TVector3 hit2Pos, TVector3 hit3Pos, double t21, double t31)
 {
-  double R21 = sqrt(pow(hit2Pos(0) - hit1Pos(0), 2) + pow(hit2Pos(1) - hit1Pos(1), 2));
-  double R32 = sqrt(pow(hit3Pos(0) - hit2Pos(0), 2) + pow(hit3Pos(1) - hit2Pos(1), 2));
-  double R13 = sqrt(pow(hit1Pos(0) - hit3Pos(0), 2) + pow(hit1Pos(1) - hit3Pos(1), 2));
-
-  double TDiffTOR1 = 0.0;
-  double TDiffTOR2 = t21;
-  double TDiffTOR3 = t31;
-
-  TDiffTOR2 = kLightVelocity_cm_ps * TDiffTOR2;
-  TDiffTOR3 = kLightVelocity_cm_ps * TDiffTOR3;
-
-  double R0 = 0.0;
-
-  if (R0 < (R21 - TDiffTOR2) / 2.0)
-  {
-    R0 = (R21 - TDiffTOR2) / 2.0;
-  }
-  if (R0 < (R32 - TDiffTOR2 - TDiffTOR3) / 2.0)
-  {
-    R0 = (R32 - TDiffTOR2 - TDiffTOR3) / 2.0;
-  }
-  if (R0 < (R13 - TDiffTOR3) / 2.0)
-  {
-    R0 = (R13 - TDiffTOR3) / 2.0;
-  }
-
-  double R1 = 0.;
-  double R2 = 0.;
-  double R3 = 0.;
-
-  vector<double> temp, temp2;
-  vector<vector<double>> points;
-  temp.push_back(0.0);
-  temp.push_back(0.0);
-
-  points.push_back(temp);
-  points.push_back(temp);
-  points.push_back(temp);
-  points.push_back(temp);
-  points.push_back(temp);
-  points.push_back(temp);
-  temp.clear();
-
-  double Distance = 0.0;
-  double MinDistance = 0.0;
-  double PreviousDistance = 10000000.0;
-
+  double distanceHit1Hit3 = (hit1Pos - hit3Pos).Mag();
+  double distanceHit2Hit1 = (hit2Pos - hit1Pos).Mag();
+  double distanceHit3Hit2 = (hit3Pos - hit2Pos).Mag();
+  double distanceTimeHit2Hit1 = kLightVelocity_cm_ps*t21;
+  double distanceTimeHit3Hit1 = kLightVelocity_cm_ps*t31;
+  
+  double radiusAddition = std::max({distanceHit2Hit1 - distanceTimeHit2Hit1, 
+                                    distanceHit3Hit2 - distanceTimeHit2Hit1 - distanceTimeHit3Hit1, 
+                                    distanceHit1Hit3 - distanceTimeHit3Hit1})/2.0;
+  double radiusSphere1 = 0., radiusSphere2 = 0., radiusSphere3 = 0.;
+  double radiusStep = 1., radiusDirection = 1;
+  double intersectionTrianglePerimeter = 0., minInterTriPer = 0., prevInterTriPer = DBL_MAX;
+  
+  vector<double> tempVec = {0.,0.}, tempVec2;
+  vector<vector<double>> interPoints = {tempVec, tempVec, tempVec, tempVec, tempVec, tempVec};
   int test = 1;
+
+  int tooManyIterationsCheck = 50;
+  double finalStep = 0.01;
   while (test)
   {
-    R1 = TDiffTOR1 + R0 + 1;
-    R2 = TDiffTOR2 + R0 + 1;
-    R3 = TDiffTOR2 + R0 + 1;
-    points = findIntersectiosOfCircles(hit1Pos, hit2Pos, hit3Pos, R1, R2, R3, R13, R21, R32);
+    radiusSphere1 = radiusAddition + 1;
+    radiusSphere2 = distanceTimeHit2Hit1 + radiusAddition + 1;
+    radiusSphere3 = distanceTimeHit3Hit1 + radiusAddition + 1;
+    interPoints = findIntersectiosOfCircles(hit1Pos, hit2Pos, hit3Pos, radiusSphere1, radiusSphere2, radiusSphere3, 
+                                            distanceHit1Hit3, distanceHit2Hit1, distanceHit3Hit2);
 
-    MinDistance = 1000000.0;
+    minInterTriPer = DBL_MAX;
     for (unsigned i = 0; i < 2; i++)
     {
       for (unsigned j = 0; j < 2; j++)
       {
         for (unsigned k = 0; k < 2; k++)
         {
-          Distance = sqrt(pow(points[i][0] - points[j + 2][0], 2) + pow(points[i][1] - points[j + 2][1], 2)) +
-                     sqrt(pow(points[i][0] - points[k + 4][0], 2) + pow(points[i][1] - points[k + 4][1], 2)) +
-                     sqrt(pow(points[k + 4][0] - points[j + 2][0], 2) + pow(points[k + 4][1] - points[j + 2][1], 2));
-          if (Distance < MinDistance)
+          intersectionTrianglePerimeter = sqrt(pow(interPoints[i][0] - interPoints[j + 2][0], 2) + pow(interPoints[i][1] - interPoints[j + 2][1], 2)) +
+                     sqrt(pow(interPoints[i][0] - interPoints[k + 4][0], 2) + pow(interPoints[i][1] - interPoints[k + 4][1], 2)) +
+                     sqrt(pow(interPoints[k + 4][0] - interPoints[j + 2][0], 2) + pow(interPoints[k + 4][1] - interPoints[j + 2][1], 2));
+          if (intersectionTrianglePerimeter < minInterTriPer)
           {
-            MinDistance = Distance;
-            temp.clear();
-            temp.push_back(points[i][0]);
-            temp.push_back(points[i][1]);
-            temp.push_back(points[2 + j][0]);
-            temp.push_back(points[2 + j][1]);
-            temp.push_back(points[4 + k][0]);
-            temp.push_back(points[4 + k][1]);
+            minInterTriPer = intersectionTrianglePerimeter;
+            tempVec.clear();
+            tempVec.push_back(interPoints[i][0]);
+            tempVec.push_back(interPoints[i][1]);
+            tempVec.push_back(interPoints[2 + j][0]);
+            tempVec.push_back(interPoints[2 + j][1]);
+            tempVec.push_back(interPoints[4 + k][0]);
+            tempVec.push_back(interPoints[4 + k][1]);
           }
         }
       }
     }
     test++;
-    if (test % 50 == 0)
+//Checking if there are too many iterations
+    if (test%tooManyIterationsCheck == 0)
     {
-      if (MinDistance == 1000000.0)
+      if (minInterTriPer == DBL_MAX)
       {
-        temp.clear();
-        temp.push_back(100.0);
-        temp.push_back(100.0);
-        temp.push_back(100.0);
-        temp.push_back(100.0);
-        temp.push_back(100.0);
-        temp.push_back(100.0);
+        tempVec.clear();
+        tempVec.push_back(DBL_MAX/2);
+        tempVec.push_back(DBL_MAX/2);
+        tempVec.push_back(DBL_MAX/2);
+        tempVec.push_back(DBL_MAX/2);
+        tempVec.push_back(DBL_MAX/2);
+        tempVec.push_back(DBL_MAX/2);
         break;
       }
     }
-    if (MinDistance > PreviousDistance)
-      test = 0;
+    if (minInterTriPer > prevInterTriPer) {
+      if (radiusStep < finalStep)
+        test = 0;
+      else
+        radiusStep = -0.1*radiusStep;
+    }
     else
     {
-      PreviousDistance = MinDistance;
-      temp2 = temp;
+      prevInterTriPer = minInterTriPer;
+      tempVec2 = tempVec;
     }
-    R0 += 1;
+    radiusAddition += radiusStep;
   }
-  vector<double> R0s, Distances;
-  if (MinDistance != 1000000.0)
-    test = 1;
-
-  double MinnDistance = 1000000.0;
-  while (test)
+  if (minInterTriPer > DBL_MAX/2) {
+    TVector3 badPoint(DBL_MAX/2, DBL_MAX/2, DBL_MAX/2);
+    return badPoint;
+  }
+  
+  std::vector<double> radiiToMinimize, perimetersToMinimize;
+  double radiiTemp;
+  int pointsForMinimization = 5;
+  for (int i=0; i<pointsForMinimization; i++)
   {
-    R1 = TDiffTOR1 + R0 + 1;
-    R2 = TDiffTOR2 + R0 + 1;
-    R3 = TDiffTOR2 + R0 + 1;
-    points = findIntersectiosOfCircles(hit1Pos, hit2Pos, hit3Pos, R1, R2, R3, R13, R21, R32);
+    radiiTemp = radiusAddition + (i - pointsForMinimization/2)*radiusStep;
+    radiusSphere1 = radiiTemp + 1;
+    radiusSphere2 = distanceTimeHit2Hit1 + radiiTemp + 1;
+    radiusSphere3 = distanceTimeHit3Hit1 + radiiTemp + 1;
+    interPoints = findIntersectiosOfCircles(hit1Pos, hit2Pos, hit3Pos, radiusSphere1, radiusSphere2, radiusSphere3, 
+                                            distanceHit1Hit3, distanceHit2Hit1, distanceHit3Hit2);
 
-    MinDistance = 1000000.;
+    minInterTriPer = DBL_MAX;
     for (unsigned i = 0; i < 2; i++)
     {
       for (unsigned j = 0; j < 2; j++)
       {
         for (unsigned k = 0; k < 2; k++)
         {
-          Distance = sqrt(pow(points[i][0] - points[j + 2][0], 2) + pow(points[i][1] - points[j + 2][1], 2)) +
-                     sqrt(pow(points[i][0] - points[k + 4][0], 2) + pow(points[i][1] - points[k + 4][1], 2)) +
-                     sqrt(pow(points[k + 4][0] - points[j + 2][0], 2) + pow(points[k + 4][1] - points[j + 2][1], 2));
-          if (Distance < MinDistance)
+          intersectionTrianglePerimeter = sqrt(pow(interPoints[i][0] - interPoints[j + 2][0], 2) + pow(interPoints[i][1] - interPoints[j + 2][1], 2)) +
+                     sqrt(pow(interPoints[i][0] - interPoints[k + 4][0], 2) + pow(interPoints[i][1] - interPoints[k + 4][1], 2)) +
+                     sqrt(pow(interPoints[k + 4][0] - interPoints[j + 2][0], 2) + pow(interPoints[k + 4][1] - interPoints[j + 2][1], 2));
+          if (intersectionTrianglePerimeter < minInterTriPer)
           {
-            MinDistance = Distance;
-            temp.clear();
-            temp.push_back(points[i][0]);
-            temp.push_back(points[i][1]);
-            temp.push_back(points[2 + j][0]);
-            temp.push_back(points[2 + j][1]);
-            temp.push_back(points[4 + k][0]);
-            temp.push_back(points[4 + k][1]);
+            minInterTriPer = intersectionTrianglePerimeter;
           }
         }
       }
     }
-    if (MinDistance != 1000000.0)
-    {
-      R0s.push_back(R0);
-      Distances.push_back(MinDistance);
+    if (minInterTriPer < DBL_MAX) {
+      radiiToMinimize.push_back(radiiTemp);
+      perimetersToMinimize.push_back(minInterTriPer);
     }
-
-    test++;
-    if (test % 50 == 0)
-    {
-      if (MinDistance == 1000000.0)
-      {
-        temp.clear();
-        temp.push_back(100.0);
-        temp.push_back(100.0);
-        temp.push_back(100.0);
-        temp.push_back(100.0);
-        temp.push_back(100.0);
-        temp.push_back(100.0);
-        break;
-      }
-      test = 0;
-    }
-    if (MinDistance < MinnDistance)
-    {
-      MinnDistance = MinDistance;
-    }
-    PreviousDistance = MinDistance;
-    temp2 = temp;
-    R0 -= 0.1;
   }
-
-  if (MinnDistance != 1000000.0)
-  {
-    double R0Min;
-    double minEle = *min_element(begin(Distances), end(Distances));
-    if (minEle == Distances[0])
-    {
-      R0Min = R0s[0];
-    }
-    else if (minEle == Distances[Distances.size() - 1])
-    {
-      R0Min = R0s[R0s.size() - 1];
-    }
-    else
-    {
-      R0Min = findMinimumFromDerivative(R0s, Distances);
-    }
-    R1 = TDiffTOR1 + R0Min + 1;
-    R2 = TDiffTOR2 + R0Min + 1;
-    R3 = TDiffTOR2 + R0Min + 1;
-    points = findIntersectiosOfCircles(hit1Pos, hit2Pos, hit3Pos, R1, R2, R3, R13, R21, R32);
-
-    MinDistance = 1000000.0;
+  TVector3 recoPoint(DBL_MAX, DBL_MAX, DBL_MAX);
+  radiiTemp = DBL_MAX;
+  if (radiiToMinimize.size() > 2) {
+    radiiTemp = findMinimumFromDerivative(radiiToMinimize, perimetersToMinimize);
+    minInterTriPer = DBL_MAX;
     for (unsigned i = 0; i < 2; i++)
     {
       for (unsigned j = 0; j < 2; j++)
       {
         for (unsigned k = 0; k < 2; k++)
         {
-          Distance = sqrt(pow(points[i][0] - points[j + 2][0], 2) + pow(points[i][1] - points[j + 2][1], 2)) +
-                     sqrt(pow(points[i][0] - points[k + 4][0], 2) + pow(points[i][1] - points[k + 4][1], 2)) +
-                     sqrt(pow(points[k + 4][0] - points[j + 2][0], 2) + pow(points[k + 4][1] - points[j + 2][1], 2));
-          if (Distance < MinDistance)
+          intersectionTrianglePerimeter = sqrt(pow(interPoints[i][0] - interPoints[j + 2][0], 2) + pow(interPoints[i][1] - interPoints[j + 2][1], 2)) +
+                     sqrt(pow(interPoints[i][0] - interPoints[k + 4][0], 2) + pow(interPoints[i][1] - interPoints[k + 4][1], 2)) +
+                     sqrt(pow(interPoints[k + 4][0] - interPoints[j + 2][0], 2) + pow(interPoints[k + 4][1] - interPoints[j + 2][1], 2));
+          if (intersectionTrianglePerimeter < minInterTriPer)
           {
-            MinDistance = Distance;
-            temp.clear();
-            temp.push_back(points[i][0]);
-            temp.push_back(points[i][1]);
-            temp.push_back(points[2 + j][0]);
-            temp.push_back(points[2 + j][1]);
-            temp.push_back(points[4 + k][0]);
-            temp.push_back(points[4 + k][1]);
+            minInterTriPer = intersectionTrianglePerimeter;
+            tempVec.clear();
+            tempVec.push_back(interPoints[i][0]);
+            tempVec.push_back(interPoints[i][1]);
+            tempVec.push_back(interPoints[2 + j][0]);
+            tempVec.push_back(interPoints[2 + j][1]);
+            tempVec.push_back(interPoints[4 + k][0]);
+            tempVec.push_back(interPoints[4 + k][1]);
           }
         }
       }
     }
+    TVector3 tempPoint((tempVec[0] + tempVec[2] + tempVec[4]) / 3, (tempVec[1] + tempVec[3] + tempVec[5]) / 3, hit1Pos(2));
+    recoPoint = tempPoint;
   }
-
-  TVector3 recoPoint((temp[0] + temp[2] + temp[4]) / 3, (temp[1] + temp[3] + temp[5]) / 3, hit1Pos(2));
   return recoPoint;
 }
 
@@ -1232,28 +1264,35 @@ vector<vector<double>> EventCategorizerTools::findIntersectiosOfCircles(TVector3
 
 double EventCategorizerTools::findMinimumFromDerivative(std::vector<double> x_vec, std::vector<double> y_vec)
 {
-  // Checking which element i of y values vecotr is a minimum, smaller than elements i-1 and i+1
-  unsigned minIndex = 0;
-  for (unsigned i = 1; i < y_vec.size() - 1; ++i)
-  {
-    if (y_vec.at(i) < y_vec.at(i - 1) && y_vec.at(i) < y_vec.at(i + 1))
-    {
-      minIndex = i;
-      break;
-    }
-  }
-
-  double a = (y_vec[minIndex + 1] - y_vec[minIndex] - (y_vec[minIndex] - y_vec[minIndex - 1])) /
-             ((x_vec[minIndex + 1] + x_vec[minIndex]) / 2.0 - (x_vec[minIndex] + x_vec[minIndex - 1]) / 2.0);
-
-  double b = y_vec[minIndex + 1] - y_vec[minIndex] - a * (x_vec[minIndex + 1] + x_vec[minIndex]) / 2.0;
-
-  if (a > 0.0)
-  {
-    return -b / a;
-  }
-  else
-  {
-    return 0.0;
-  }
+    if (x_vec.size() > 2) {
+        double derr1 = y_vec.at(1) - y_vec.at(0);
+        unsigned stopind = 0;
+        for( unsigned i=1; i<y_vec.size()-2; i++ )
+        {
+            if( derr1 < 0 )
+            {
+                derr1 = y_vec.at(i+1) - y_vec.at(i);
+                if(derr1 > 0)
+                {
+                    stopind = i;
+                    break;
+                }
+            }
+        }
+        if (stopind > y_vec.size()-2)
+            stopind = y_vec.size()-2;
+        if (stopind == 0)
+            stopind = 1;
+        double a = ( y_vec.at(stopind+1) - y_vec.at(stopind) - (y_vec.at(stopind) - y_vec.at(stopind-1)) )/
+                    ( (x_vec.at(stopind+1) + x_vec.at(stopind))/2 - (x_vec.at(stopind) + x_vec.at(stopind-1))/2 );
+        double b = y_vec.at(stopind+1) - y_vec.at(stopind) - a*(x_vec.at(stopind+1) + x_vec.at(stopind))/2;
+        if( a )
+            return -b/a;
+        else
+        {
+            std::cout << "error, wtf, error, no idea?!?" << std::endl;
+            return 0;
+        }
+    } else
+        return 0;
 }
